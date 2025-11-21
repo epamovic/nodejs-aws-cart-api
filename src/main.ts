@@ -1,109 +1,50 @@
 import { NestFactory } from '@nestjs/core';
-
+import { ExpressAdapter } from '@nestjs/platform-express';
+import {
+  APIGatewayProxyEvent,
+  APIGatewayProxyResult,
+  Context,
+} from 'aws-lambda';
+import serverlessExpress from 'serverless-http';
+import express from 'express';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
-import { AppController } from './app.controller';
-import { CartController } from './cart/cart.controller';
 
-export async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+let cachedHandler: any;
 
-  const configService = app.get(ConfigService);
+async function bootstrap() {
+  if (!cachedHandler) {
+    const expressApp = express();
+    const app = await NestFactory.create(
+      AppModule,
+      new ExpressAdapter(expressApp),
+    );
 
-  const port = configService.get('APP_PORT') || 4000;
+    app.enableCors({
+      origin: (req, callback) => callback(null, true),
+    });
+    app.use(helmet());
 
-  app.enableCors({
-    origin: (req, callback) => callback(null, true),
-  });
-  app.use(helmet());
+    await app.init();
 
-  await app.listen(port, () => {
-    console.log('App is running on %s port', port);
-  });
-
-  return app; // Return the app instance
+    // Create serverless handler
+    cachedHandler = serverlessExpress(expressApp);
+  }
+  return cachedHandler;
 }
-let nestApp: any;
 
-// Lambda handler that accesses the NestJS app
-export async function handler(event: any, context: any) {
+// Lambda handler that uses NestJS with serverless-http
+export async function handler(
+  event: APIGatewayProxyEvent,
+  context: Context,
+): Promise<APIGatewayProxyResult> {
   console.log('Lambda event:', JSON.stringify(event, null, 2));
 
   try {
-    // Get the NestJS app (create it once and cache it)
-    if (!nestApp) {
-      nestApp = await bootstrap();
-    }
-
-    // Extract request details from Lambda event
-    const method = event.httpMethod?.toLowerCase() || 'get';
-    const path = event.path || '/';
-    const headers = event.headers || {};
-    const body = event.body ? JSON.parse(event.body) : null;
-    const query = event.queryStringParameters || {};
-
-    // Access NestJS controllers/services directly
-    if (path === '/ping' || path === '/') {
-      // Get AppController from the NestJS app using the class token
-      const appController = nestApp.get(AppController);
-      const result = appController.healthCheck();
-
-      return {
-        statusCode: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-        body: JSON.stringify(result),
-      };
-    }
-
-    if (path === '/api/auth/register' && method === 'post') {
-      const appController = nestApp.get(AppController);
-      const result = appController.register(body);
-
-      return {
-        statusCode: 201,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-        body: JSON.stringify(result),
-      };
-    }
-
-    if (path === '/api/profile/cart' && method === 'get') {
-      const cartController = nestApp.get(CartController);
-      // Note: You'd need to handle authentication here
-      const mockReq = { user: { id: 'test-user' } };
-      const result = cartController.findUserCart(mockReq);
-
-      return {
-        statusCode: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-        body: JSON.stringify(result),
-      };
-    }
-
-    // Default response for unmatched routes
-    return {
-      statusCode: 404,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
-      body: JSON.stringify({
-        message: 'Route not found',
-        path,
-        method,
-        availableRoutes: ['/ping', '/api/auth/register', '/api/profile/cart'],
-      }),
-    };
+    const serverlessHandler = await bootstrap();
+    return await serverlessHandler(event, context);
   } catch (error) {
     console.error('Lambda handler error:', error);
     return {
@@ -118,6 +59,23 @@ export async function handler(event: any, context: any) {
       }),
     };
   }
+}
+
+// For local development
+export async function startLocal() {
+  const app = await NestFactory.create(AppModule);
+
+  const configService = app.get(ConfigService);
+  const port = configService.get('APP_PORT') || 4000;
+
+  app.enableCors({
+    origin: (req, callback) => callback(null, true),
+  });
+  app.use(helmet());
+
+  await app.listen(port, () => {
+    console.log('App is running on %s port', port);
+  });
 }
 
 // Only run local bootstrap if not in Lambda
