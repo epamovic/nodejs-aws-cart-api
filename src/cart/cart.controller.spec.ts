@@ -9,7 +9,17 @@ describe('CartController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [CartController],
-      providers: [CartService],
+      providers: [
+        CartService,
+        {
+          provide: 'CartEntityRepository',
+          useValue: {}, // Provide a mock implementation if needed
+        },
+        {
+          provide: 'CartItemEntityRepository',
+          useValue: {}, // Provide a mock implementation if needed
+        },
+      ],
       imports: [OrderModule],
     }).compile();
 
